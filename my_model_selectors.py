@@ -98,11 +98,53 @@ class SelectorDIC(ModelSelector):
 
 class SelectorCV(ModelSelector):
     ''' select best model based on average log Likelihood of cross-validation folds
+    self.words = all_word_sequences
+        self.hwords = all_word_Xlengths
+        self.sequences = all_word_sequences[this_word]
+        self.X, self.lengths = all_word_Xlengths[this_word]
+        self.this_word = this_word
+        self.n_constant = n_constant
+        self.min_n_components = min_n_components
+        self.max_n_components = max_n_components
+        self.random_state = random_state
+        self.verbose = verbose
+
+
+        X, lengths = training.get_word_Xlengths(word)
+    model = GaussianHMM(n_components=num_hidden_states, n_iter=1000).fit(X, lengths)
+    logL = model.score(X, lengths)
 
     '''
 
     def select(self):
+        # TODO implement model selection using CV
+        from sklearn.model_selection import KFold
+        import asl_utils
+
         warnings.filterwarnings("ignore", category=DeprecationWarning)
 
-        # TODO implement model selection using CV
-        raise NotImplementedError
+        models_and_scores = []     
+
+        for num_states in range(self.min_n_components, self.max_n_components):
+            self.num_states = num_states
+
+            logL_results = []
+
+            split_method = KFold()            
+            for cv_train_idx, cv_test_idx in split_method.split(self.sequences):    
+                self.X, self.lengths = asl_utils.combine_sequences(cv_train_idx, self.sequences)
+                test_X, test_lengths = asl_utils.combine_sequences(cv_test_idx, self.sequences)                
+
+                model = self.base_model(self.num_states)
+                if model is not None:
+                    logL = model.score(test_X, test_lengths)
+                    logL_results.append(logL)
+
+            if len(logL_results) == 0:
+                print('Failed to create any models with {} number of components'.format(num_states))
+            else:
+                models_and_scores.append((model, sum(logL_results)/float(len(models_and_scores))))
+                print("{} {}".format(num_states, sum(logL_results)/float(len(models_and_scores))))
+        
+        models_and_scores.sort(key = lambda item : item[1])
+        return models_and_scores[0]

@@ -21,5 +21,38 @@ def recognize(models: dict, test_set: SinglesData):
     probabilities = []
     guesses = []
     # TODO implement the recognizer
-    # return probabilities, guesses
-    raise NotImplementedError
+
+    probabilities = []
+    guesses = [] 
+
+    #word_indices = sorted([word_idx for seq_index in test_set.sentences_index for word_idx in test_set.sentences_index[seq_index]])
+    word_indices = [word_idx for seq_index in test_set.sentences_index for word_idx in test_set.sentences_index[seq_index]]    
+
+    for word_index in word_indices:        
+
+        best_guess_word = None 
+        best_guess_logL = float("-inf")
+
+        X, lengths = test_set.get_item_Xlengths(word_index)
+        
+        #seq_probabilities = [(model_word, model.score(X, lengths)) for model_word, model in models.items()]
+        seq_probabilities = {}
+        for model_word, model in models.items():
+            try:
+                logL = model.score(X, lengths)
+                #seq_probabilities.append((model_word, logL))
+                seq_probabilities[model_word] = logL
+
+                if logL > best_guess_logL:
+                    best_guess_logL = logL
+                    best_guess_word = model_word
+            except:
+                #seq_probabilities.append((model_word, float("-inf"))) 
+                seq_probabilities[model_word] = float("-inf")
+
+        #seq_probabilities = sorted(seq_probabilities, key=lambda item: item[1], reverse=True)
+
+        probabilities.append(seq_probabilities)
+        guesses.append(best_guess_word)
+
+    return probabilities, guesses

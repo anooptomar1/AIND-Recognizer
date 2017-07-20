@@ -7,7 +7,6 @@ from hmmlearn.hmm import GaussianHMM
 from sklearn.model_selection import KFold
 from asl_utils import combine_sequences
 
-
 class ModelSelector(object):
     '''
     base class for model selection (strategy design pattern)
@@ -108,24 +107,29 @@ class SelectorBIC(ModelSelector):
                     N = float(len(self.X))
                     BIC = (-2 * logL) + (p * math.log(N))
                     models_and_scores.append((model, BIC))
-                except:
-                    pass                    
+                except Exception as ex:
+                    if self.verbose:
+                        print("Failed to score model for model with {} components and for word {} ... e {}"
+                            .format(n_components, self.this_word, ex))         
                 
             else:
                 if self.verbose:
                     print('Failed to create a model with {} number of components using the word {}'.format(
-                        n_components, self.this_word))                
+                        n_components, self.this_word))               
+
+        if models_and_scores is not None and len(models_and_scores) > 0:
+            # http://www2.imm.dtu.dk/courses/02433/doc/ch6_slides.pdf
+            # Model selection: The lower the AIC/BIC value the better the model 
+            # (only compare AIC with AIC and BIC with BIC values!).
+            models_and_scores.sort(key = lambda item : item[1], reverse=False)
+
+            if self.verbose:
+                print('Best model {} with word {} average logL {}'.format(
+                    models_and_scores[0][0].n_components, self.this_word, models_and_scores[0][1]))
         
-        # http://www2.imm.dtu.dk/courses/02433/doc/ch6_slides.pdf
-        # Model selection: The lower the AIC/BIC value the better the model 
-        # (only compare AIC with AIC and BIC with BIC values!).
-        models_and_scores.sort(key = lambda item : item[1], reverse=False)
-
-        if self.verbose:
-            print('Best model {} with word {} average logL {}'.format(
-                models_and_scores[0][0].n_components, self.this_word, models_and_scores[0][1]))
-
-        return models_and_scores[0][0]
+            return models_and_scores[0][0]
+        else:
+            return None 
 
 
 class SelectorDIC(ModelSelector):
@@ -141,7 +145,7 @@ class SelectorDIC(ModelSelector):
 
     '''
 
-    def select(self, words_to_train):
+    def select(self):
         warnings.filterwarnings("ignore", category=DeprecationWarning)
         # TODO implement model selection based on DIC scores
 
@@ -149,8 +153,11 @@ class SelectorDIC(ModelSelector):
 
         #Y = [seq_len[0] for seq_len in self.hwords[word] for word in words_to_train if word is not self.this_word]
         #Y_lengths = [seq_len[1] for seq_len in self.hwords[word] for word in words_to_train if word is not self.this_word]        
-        other_word_sequences = [seq_len for seq_len in self.hwords[word] for word in words_to_train if word is not self.this_word]        
-        other_words_length = float(len(words_to_train)-1)
+
+        other_words = [key for key in self.words if key != self.this_word]
+
+        other_word_sequences = [self.hwords[word] for word in other_words]        
+        other_words_length = float(len(other_words)-1)
 
         for n_components in range(self.min_n_components, self.max_n_components):                        
             model = self.base_model(n_components)
@@ -164,15 +171,21 @@ class SelectorDIC(ModelSelector):
 
                     models_and_scores.append((model, DIC))
                 except: 
-                    pass 
+                    if self.verbose:
+                        print('Failed to create a model with {} number of components using the word {}'.format(
+                            n_components, self.this_word))    
         
-        models_and_scores.sort(key = lambda item : item[1], reverse=True)
+        if models_and_scores is not None and len(models_and_scores) > 0:
 
-        if self.verbose:
-            print('Best model {} with word {} average logL {}'.format(
-                models_and_scores[0][0].n_components, self.this_word, models_and_scores[0][1]))
+            models_and_scores.sort(key = lambda item : item[1], reverse=True)
 
-        return models_and_scores[0][0]
+            if self.verbose:
+                print('Best model {} with word {} average logL {}'.format(
+                    models_and_scores[0][0].n_components, self.this_word, models_and_scores[0][1]))
+
+            return models_and_scores[0][0]
+        else:
+            return None 
 
 
 class SelectorCV(ModelSelector):
@@ -193,39 +206,43 @@ class SelectorCV(ModelSelector):
 
             trained_model = None # keep a valid reference to the trained model in-case the last iteration fails
             logL_results = [] # create a list to hold the results (used to find the average)
+            try:
+                split_method = KFold(n_splits=2)   
+                for cv_train_idx, cv_test_idx in split_method.split(self.sequences):    
+                    self.X, self.lengths = asl_utils.combine_sequences(cv_train_idx, self.sequences)
+                    test_X, test_lengths = asl_utils.combine_sequences(cv_test_idx, self.sequences)                
 
-            split_method = KFold(n_splits=2)   
-            for cv_train_idx, cv_test_idx in split_method.split(self.sequences):    
-                self.X, self.lengths = asl_utils.combine_sequences(cv_train_idx, self.sequences)
-                test_X, test_lengths = asl_utils.combine_sequences(cv_test_idx, self.sequences)                
+                    model = self.base_model(n_components)
+                    if model is not None:
+                        try:
+                            logL = model.score(test_X, test_lengths)
+                            logL_results.append(logL)
+                            trained_model = model 
+                        except:
+                            pass                    
 
-                model = self.base_model(n_components)
-                if model is not None:
-                    try:
-                        logL = model.score(test_X, test_lengths)
-                        logL_results.append(logL)
-                        trained_model = model 
-                    except:
-                        pass                    
+                if len(logL_results) > 0:
+                    avg_logL_score = sum(logL_results) / max( float(len(models_and_scores)), sys.float_info.epsilon )
+                    models_and_scores.append((trained_model, avg_logL_score))
 
-            if len(logL_results) > 0:
-                avg_logL_score = sum(logL_results) / max( float(len(models_and_scores)), sys.float_info.epsilon )
-                models_and_scores.append((trained_model, avg_logL_score))
-
-                # lets append it to the model as well so we can surface it in the notepad 
-                #model['avg_logL_score'] = avg_logL_score
-            else:
-                if self.verbose:
-                    print('Failed to create a model with {} number of components using the word {}'.format(
-                        n_components, self.this_word))                
+                    # lets append it to the model as well so we can surface it in the notepad 
+                    #model['avg_logL_score'] = avg_logL_score
+                else:
+                    if self.verbose:
+                        print('Failed to create a model with {} number of components using the word {}'.format(
+                            n_components, self.this_word))                
+            except: 
+                pass 
         
-        # want to maximise likelihood therefore sort from largest to smallest and return the first 
-        # one 
-        # http://blog.stata.com/2011/02/16/positive-log-likelihood-values-happen/13/
-        models_and_scores.sort(key = lambda item : item[1], reverse=True)
+        if models_and_scores is not None and len(models_and_scores) > 0:
+            # want to maximise likelihood therefore sort from largest to smallest and return the first one 
+            # http://blog.stata.com/2011/02/16/positive-log-likelihood-values-happen/13/
+            models_and_scores.sort(key = lambda item : item[1], reverse=True)
 
-        if self.verbose:
-            print('Best model {} with word {} average logL {}'.format(
-                models_and_scores[0][0].n_components, self.this_word, models_and_scores[0][1]))
+            if self.verbose:
+                print('Best model {} with word {} average logL {}'.format(
+                    models_and_scores[0][0].n_components, self.this_word, models_and_scores[0][1]))
 
-        return models_and_scores[0][0]
+            return models_and_scores[0][0]
+        else:
+            return None 
